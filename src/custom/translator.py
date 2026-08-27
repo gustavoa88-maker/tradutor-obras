@@ -2,7 +2,7 @@
 """Tradutor Obras server entry point.
 
 Imports the upstream-shaped Tolmach server, installs this fork's proper-name
-protection overlay, then starts the same Flask application.
+protection and small UI overlay, then starts the same Flask application.
 """
 
 from __future__ import annotations
@@ -19,9 +19,11 @@ SRC_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC_DIR))
 
 import translator as core  # noqa: E402
-from proper_name_protection import install  # noqa: E402
+from custom_ui import install as install_custom_ui  # noqa: E402
+from proper_name_protection import install as install_proper_name_protection  # noqa: E402
 
-install(core)
+install_proper_name_protection(core)
+install_custom_ui(core)
 
 
 def main() -> None:
