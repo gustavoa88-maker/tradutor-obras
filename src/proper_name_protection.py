@@ -33,19 +33,32 @@ _PTBR_CULTIVATION_RULES = """PT-BR CONVENTIONS FOR CULTIVATION HONORIFICS:
 Apply these only when the words function as cultivation/xianxia honorifics or titles; ordinary uses of senior, junior, elder, brother, sister, fellow, or master still follow their sentence context.
 """
 
+_MARKER_RULES = """PROTECTED SOURCE MARKERS:
+- Any token shaped like ⟦TOLMACH_KEEP_...⟧ is an opaque protected proper name.
+- Copy every such marker exactly once and character for character into the translation.
+- You may move a marker to the position required by target-language grammar, but never translate, edit, split, duplicate, or delete it.
+"""
+
 
 def _target_conventions(target_lang: str) -> str:
     normalized = (target_lang or "").replace("-", "_").lower()
     return _PTBR_CULTIVATION_RULES if normalized in {"pt", "pt_br"} else ""
 
 
-def _with_target_conventions(terminology_context: str, target_lang: str) -> str:
-    conventions = _target_conventions(target_lang)
-    if not conventions:
+def _append_context(terminology_context: str, block: str) -> str:
+    if not block:
         return terminology_context
     if terminology_context.strip():
-        return f"{terminology_context.rstrip()}\n\n{conventions}"
-    return "\n\n" + conventions
+        return f"{terminology_context.rstrip()}\n\n{block}"
+    return "\n\n" + block
+
+
+def _with_target_conventions(terminology_context: str, target_lang: str) -> str:
+    return _append_context(terminology_context, _target_conventions(target_lang))
+
+
+def _with_marker_rules(terminology_context: str, markers: list[dict]) -> str:
+    return _append_context(terminology_context, _MARKER_RULES if markers else "")
 
 
 def _violation_summary(violations: list[dict]) -> str:
@@ -82,6 +95,7 @@ def install(core: Any) -> None:
             terminology_context,
             target_lang,
         )
+        terminology_context = _with_marker_rules(terminology_context, markers)
         translated, warning = original_stage1(
             self,
             protected_text,
@@ -142,6 +156,7 @@ def install(core: Any) -> None:
             terminology_context,
             target_lang,
         )
+        terminology_context = _with_marker_rules(terminology_context, markers)
         candidate, warning = original_candidate(
             self,
             protected_text,
