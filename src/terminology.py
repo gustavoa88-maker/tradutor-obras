@@ -255,7 +255,7 @@ class TerminologyManager:
         """
         translated_folded = translated_text.casefold()
         violations: List[Dict] = [
-            {"source": term.source, "required_target": term.target, "mode": "exact"}
+            {"source": term.source, "required_target": term.target}
             for term in self.relevant_terms(source_text)
             if term.mode == "exact" and term.target.casefold() not in translated_folded
         ]
