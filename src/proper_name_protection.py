@@ -1,12 +1,13 @@
 """Runtime integration for mechanically protected proper-name nuclei.
 
-Tolmach's translation pipeline is intentionally left upstream-shaped.  This
-module installs three narrow wrappers around the places where translated prose
-can be generated or rewritten:
+Tolmach's translation pipeline is intentionally left upstream-shaped. This
+module installs narrow wrappers around the places where translated prose can
+be generated or rewritten:
 
 * Stage 1 source text is shielded before the model sees it and restored after;
 * Review Desk alternatives get the same shielding;
-* Stage 2 is not allowed to keep a refinement that changes a protected name.
+* Stage 2 is not allowed to keep a refinement that changes a protected name;
+* PT-BR receives a small set of stable cultivation-honorific conventions.
 
 Keeping the integration here makes future upstream synchronisation much less
 conflict-prone than scattering custom edits through translator.py.
@@ -19,6 +20,32 @@ from typing import Any
 
 
 _INSTALLED_ATTR = "_tolmach_proper_name_protection_installed"
+
+_PTBR_CULTIVATION_RULES = """PT-BR CONVENTIONS FOR CULTIVATION HONORIFICS:
+- When Senior is an honorific before a person's name, translate it as "Veterano", never "Sênior".
+- Elder as a distinct formal title or position is "Ancião"; do not collapse Elder into Senior/Veterano.
+- Senior Brother => Irmão Mais Velho.
+- Junior Brother => Irmão Mais Novo.
+- Senior Sister => Irmã Mais Velha.
+- Junior Sister => Irmã Mais Nova.
+- Junior used alone or before a name is contextual; prefer a natural form such as "Jovem" when it denotes lower generation/status, and avoid the anglicism "Júnior" as the default.
+- Fellow Daoist => Companheiro Daoista when it is the cultivation form of address.
+Apply these only when the words function as cultivation/xianxia honorifics or titles; ordinary uses of senior, junior, elder, brother, sister, fellow, or master still follow their sentence context.
+"""
+
+
+def _target_conventions(target_lang: str) -> str:
+    normalized = (target_lang or "").replace("-", "_").lower()
+    return _PTBR_CULTIVATION_RULES if normalized in {"pt", "pt_br"} else ""
+
+
+def _with_target_conventions(terminology_context: str, target_lang: str) -> str:
+    conventions = _target_conventions(target_lang)
+    if not conventions:
+        return terminology_context
+    if terminology_context.strip():
+        return f"{terminology_context.rstrip()}\n\n{conventions}"
+    return "\n\n" + conventions
 
 
 def _violation_summary(violations: list[dict]) -> str:
@@ -51,6 +78,10 @@ def install(core: Any) -> None:
     ):
         original_text = text
         protected_text, markers = self.terminology.protect_preserved_terms(text)
+        terminology_context = _with_target_conventions(
+            terminology_context,
+            target_lang,
+        )
         translated, warning = original_stage1(
             self,
             protected_text,
@@ -107,6 +138,10 @@ def install(core: Any) -> None:
     ):
         original_text = text
         protected_text, markers = self.terminology.protect_preserved_terms(text)
+        terminology_context = _with_target_conventions(
+            terminology_context,
+            target_lang,
+        )
         candidate, warning = original_candidate(
             self,
             protected_text,
@@ -152,6 +187,10 @@ def install(core: Any) -> None:
         terminology_context: str = "",
         terminology_violations=None,
     ):
+        terminology_context = _with_target_conventions(
+            terminology_context,
+            target_lang,
+        )
         candidate, warning, details = original_stage2(
             self,
             original_text,
