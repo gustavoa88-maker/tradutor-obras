@@ -43,6 +43,9 @@ def test_stage1_shields_only_name_nuclei_and_restores_target_grammar():
         assert "Ji" not in text
         assert "Fellow Daoist" in text
         assert "Realm" in text
+        context = kwargs["terminology_context"]
+        assert "Copy every such marker exactly once" in context
+        assert "Senior Brother => Irmão Mais Velho" in context
         return f"Companheiro Daoista {markers[0]} entrou no Reino {markers[1]}.", None
 
     terminology = TerminologyManager.from_text(
@@ -58,6 +61,25 @@ def test_stage1_shields_only_name_nuclei_and_restores_target_grammar():
     )
 
     assert translated == "Companheiro Daoista Wang entrou no Reino Ji."
+    assert warning is None
+
+
+def test_non_ptbr_target_does_not_receive_ptbr_honorific_rules():
+    def stage1(self, text, source_lang, target_lang, **kwargs):
+        assert "Senior Brother => Irmão Mais Velho" not in kwargs["terminology_context"]
+        return text, None
+
+    terminology = TerminologyManager()
+    core, _ = _core(stage1)
+    translator = core.BookTranslator(terminology)
+
+    translated, warning = translator.stage1_primary_translation(
+        "Senior Brother entered the hall.",
+        "en",
+        "es",
+    )
+
+    assert translated == "Senior Brother entered the hall."
     assert warning is None
 
 
