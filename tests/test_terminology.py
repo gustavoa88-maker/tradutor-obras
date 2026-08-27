@@ -148,6 +148,26 @@ def test_final_preserve_validation_checks_exact_occurrence_counts():
     ]
 
 
+def test_hard_violation_api_surfaces_preserve_count_failures():
+    manager = TerminologyManager.from_text(
+        "Wang Lin => Wang Lin | preserve\nHost => Host | preserve"
+    )
+    source = "Wang Lin joined the Host. Wang Lin returned."
+
+    assert manager.exact_violations(
+        source,
+        "Wang Lin entrou para o Host.",
+    ) == [
+        {
+            "source": "Wang Lin",
+            "required_target": "Wang Lin",
+            "mode": "preserve",
+            "expected_count": 2,
+            "actual_count": 1,
+        }
+    ]
+
+
 def test_exact_violations_only_check_relevant_exact_terms():
     manager = TerminologyManager.from_text(
         """
@@ -159,7 +179,7 @@ def test_exact_violations_only_check_relevant_exact_terms():
 
     assert manager.exact_violations("The garden and house.", "Сад и жилище.") == []
     assert manager.exact_violations("The garden and house.", "Двор и жилище.") == [
-        {"source": "garden", "required_target": "сад"}
+        {"source": "garden", "required_target": "сад", "mode": "exact"}
     ]
 
 
