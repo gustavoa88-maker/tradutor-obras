@@ -20,4 +20,4 @@ prefer this translation when it fits the context
 
 ## mode_preserve
 
-preserve this source spelling exactly; it is a proper name or an explicit per-book exception
+this is a protected proper-name nucleus or explicit per-book exception. The source text may show an opaque token shaped like ⟦TOLMACH_KEEP_...⟧ in its place; copy that token character for character and do not translate, expand, remove, or replace the token yourself. The runtime restores the original name after translation
