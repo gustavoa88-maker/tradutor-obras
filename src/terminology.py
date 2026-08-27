@@ -244,13 +244,32 @@ class TerminologyManager:
                 })
         return violations
 
-    def exact_violations(self, source_text: str, translated_text: str) -> List[Dict[str, str]]:
+    def exact_violations(self, source_text: str, translated_text: str) -> List[Dict]:
+        """Return every hard terminology violation used by existing QA callers.
+
+        The method keeps its historical name because the translation pipeline,
+        review desk, and quality checks already call it. ``preserve`` is also a
+        hard invariant now: every exact source spelling must survive with the
+        same occurrence count, so those failures are surfaced through the same
+        path instead of requiring every caller to learn a second API.
+        """
         translated_folded = translated_text.casefold()
-        return [
-            {"source": term.source, "required_target": term.target}
+        violations: List[Dict] = [
+            {"source": term.source, "required_target": term.target, "mode": "exact"}
             for term in self.relevant_terms(source_text)
             if term.mode == "exact" and term.target.casefold() not in translated_folded
         ]
+        violations.extend(
+            {
+                "source": item["source"],
+                "required_target": item["source"],
+                "mode": "preserve",
+                "expected_count": item["expected_count"],
+                "actual_count": item["actual_count"],
+            }
+            for item in self.preserve_occurrence_violations(source_text, translated_text)
+        )
+        return violations
 
     def enforce_exact_source_forms(self, translated_text: str) -> Tuple[str, List[ExactReplacement]]:
         """Replace an exact term only when the model leaked its source form.
