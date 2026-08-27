@@ -1,5 +1,5 @@
-"""Per-book terminology constraints: the agreed rendering of every recurring
-proper noun, and the checks that say whether the model honoured them.
+"""Per-book terminology constraints: the agreed rendering of recurring terms,
+plus deterministic protection for proper names that must survive translation.
 
 Language-neutral by design — it knows nothing about which languages a run is
 between, only about the terms it was given.
@@ -22,6 +22,21 @@ class ExactReplacement(TypedDict):
     count: int
 
 
+class PreserveMarker(TypedDict):
+    """One source occurrence hidden from the model behind a unique marker."""
+
+    placeholder: str
+    source: str
+
+
+class PreserveViolation(TypedDict):
+    """A preservation invariant that was not satisfied."""
+
+    source: str
+    expected_count: int
+    actual_count: int
+
+
 @dataclass(frozen=True)
 class GlossaryTerm:
     source: str
@@ -32,13 +47,16 @@ class GlossaryTerm:
 class TerminologyManager:
     """Language-neutral, per-book terminology constraints."""
 
-    VALID_MODES = {"exact", "inflectable", "preferred"}
+    VALID_MODES = {"exact", "inflectable", "preferred", "preserve"}
     MAX_TERMS = 500
     MAX_TERM_LENGTH = 200
 
     def __init__(self, terms: Optional[List[GlossaryTerm]] = None):
         deduplicated = {}
         for term in terms or []:
+            # Preserve is intentionally case-sensitive at match time (Host and
+            # host can mean different things), but glossary identity remains
+            # case-insensitive so two rules cannot silently fight each other.
             deduplicated[term.source.casefold()] = term
         self.terms = list(deduplicated.values())
 
@@ -82,7 +100,11 @@ class TerminologyManager:
                 )
             if mode not in cls.VALID_MODES:
                 raise ValueError(
-                    f"Glossary line {line_number}: mode must be exact, inflectable, or preferred"
+                    f"Glossary line {line_number}: mode must be exact, inflectable, preferred, or preserve"
+                )
+            if mode == "preserve" and source != target:
+                raise ValueError(
+                    f"Glossary line {line_number}: preserve requires identical source and target"
                 )
             terms.append(GlossaryTerm(source=source, target=target, mode=mode))
 
@@ -90,9 +112,29 @@ class TerminologyManager:
             raise ValueError(f"Glossary supports at most {cls.MAX_TERMS} terms")
         return cls(terms)
 
+    @staticmethod
+    def _literal_pattern(source: str, *, ignore_case: bool = False) -> re.Pattern:
+        """Match a literal term without swallowing it from a longer Latin word.
+
+        ASCII boundaries are deliberate. They protect English/romanized names
+        such as ``Wang`` from matching ``Wangly`` while still allowing exact
+        CJK strings to match when adjacent to other CJK characters.
+        """
+        left = r"(?<![A-Za-z0-9_])" if source and re.match(r"[A-Za-z0-9_]", source[0]) else ""
+        right = r"(?![A-Za-z0-9_])" if source and re.match(r"[A-Za-z0-9_]", source[-1]) else ""
+        flags = re.IGNORECASE if ignore_case else 0
+        return re.compile(f"{left}{re.escape(source)}{right}", flags)
+
     def relevant_terms(self, source_text: str) -> List[GlossaryTerm]:
         folded_text = source_text.casefold()
-        return [term for term in self.terms if term.source.casefold() in folded_text]
+        relevant = []
+        for term in self.terms:
+            if term.mode == "preserve":
+                if self._literal_pattern(term.source).search(source_text):
+                    relevant.append(term)
+            elif term.source.casefold() in folded_text:
+                relevant.append(term)
+        return relevant
 
     def prompt_context(self, source_text: str) -> str:
         relevant = self.relevant_terms(source_text)
@@ -114,6 +156,94 @@ class TerminologyManager:
             "shared/terminology", entries="\n".join(lines),
         )
 
+    def protect_preserved_terms(self, source_text: str) -> Tuple[str, List[PreserveMarker]]:
+        """Replace every ``preserve`` occurrence with a unique opaque marker.
+
+        Matching is case-sensitive by design. A rule for ``Host`` therefore
+        protects the formal name while ordinary ``host`` remains translatable.
+        Longer names win over shorter overlapping names, so ``Wang Lin`` is
+        protected as one unit even when ``Wang`` is also registered.
+        """
+        preserve_terms = [term for term in self.terms if term.mode == "preserve"]
+        if not preserve_terms or not source_text:
+            return source_text, []
+
+        # One combined regex prevents a shorter term from seeing text that has
+        # already been replaced by a marker. Sorting makes the longest overlap
+        # win at the same source position.
+        ordered = sorted(preserve_terms, key=lambda term: len(term.source), reverse=True)
+        alternatives = []
+        by_group = {}
+        for index, term in enumerate(ordered):
+            group = f"term_{index}"
+            literal = self._literal_pattern(term.source).pattern
+            alternatives.append(f"(?P<{group}>{literal})")
+            by_group[group] = term
+        combined = re.compile("|".join(alternatives))
+
+        nonce = hashlib.sha256(
+            (self.fingerprint() + "\0" + source_text).encode("utf-8")
+        ).hexdigest()[:10]
+        markers: List[PreserveMarker] = []
+        used_placeholders = set()
+
+        def replacement(match: re.Match) -> str:
+            term = by_group[match.lastgroup]
+            marker_index = len(markers)
+            placeholder = f"⟦TOLMACH_KEEP_{nonce}_{marker_index:04d}⟧"
+            while placeholder in source_text or placeholder in used_placeholders:
+                marker_index += 1
+                placeholder = f"⟦TOLMACH_KEEP_{nonce}_{marker_index:04d}⟧"
+            used_placeholders.add(placeholder)
+            markers.append({"placeholder": placeholder, "source": term.source})
+            return placeholder
+
+        return combined.sub(replacement, source_text), markers
+
+    @staticmethod
+    def restore_preserved_terms(
+        translated_text: str,
+        markers: List[PreserveMarker],
+    ) -> Tuple[str, List[PreserveViolation]]:
+        """Restore markers and report any marker that was lost or duplicated."""
+        result = translated_text
+        violations: List[PreserveViolation] = []
+        for marker in markers:
+            placeholder = marker["placeholder"]
+            count = result.count(placeholder)
+            if count != 1:
+                violations.append({
+                    "source": marker["source"],
+                    "expected_count": 1,
+                    "actual_count": count,
+                })
+            if count:
+                result = result.replace(placeholder, marker["source"])
+        return result, violations
+
+    def preserve_occurrence_violations(
+        self,
+        source_text: str,
+        translated_text: str,
+    ) -> List[PreserveViolation]:
+        """Verify that final output kept every protected spelling and count."""
+        violations: List[PreserveViolation] = []
+        for term in self.terms:
+            if term.mode != "preserve":
+                continue
+            pattern = self._literal_pattern(term.source)
+            expected = len(pattern.findall(source_text))
+            if not expected:
+                continue
+            actual = len(pattern.findall(translated_text))
+            if actual != expected:
+                violations.append({
+                    "source": term.source,
+                    "expected_count": expected,
+                    "actual_count": actual,
+                })
+        return violations
+
     def exact_violations(self, source_text: str, translated_text: str) -> List[Dict[str, str]]:
         translated_folded = translated_text.casefold()
         return [
@@ -127,11 +257,11 @@ class TerminologyManager:
 
         A glossary is still provided to the model as translation context: it
         remains the only safe way to choose a rendering that is absent from
-        the output.  But an ``exact`` rule has one deterministic case we can
+        the output. But an ``exact`` rule has one deterministic case we can
         honour without guessing — the model translated the surrounding prose
-        and left the literal source term unchanged.  Fix that case here, both
-        for fresh generations and cached chunks.  ``inflectable`` and
-        ``preferred`` terms are intentionally never rewritten this way.
+        and left the literal source term unchanged. Fix that case here, both
+        for fresh generations and cached chunks. ``inflectable``, ``preferred``
+        and ``preserve`` terms are intentionally never rewritten this way.
         """
         replacements: List[ExactReplacement] = []
         result = translated_text
@@ -139,9 +269,8 @@ class TerminologyManager:
             if term.mode != "exact" or term.source.casefold() == term.target.casefold():
                 continue
             # Do not turn a source substring inside a longer word into a
-            # glossary term. ``\w`` is Unicode-aware, so this works for Latin,
-            # Cyrillic and CJK source terms alike.
-            pattern = re.compile(rf"(?<!\w){re.escape(term.source)}(?!\w)", re.IGNORECASE)
+            # glossary term.
+            pattern = self._literal_pattern(term.source, ignore_case=True)
             result, count = pattern.subn(term.target, result)
             if count:
                 replacements.append({

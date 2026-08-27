@@ -17,3 +17,7 @@ use this lexical choice; grammatical inflection is allowed
 ## mode_preferred
 
 prefer this translation when it fits the context
+
+## mode_preserve
+
+preserve this source spelling exactly; it is a proper name or an explicit per-book exception
